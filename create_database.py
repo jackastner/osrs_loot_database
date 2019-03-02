@@ -30,11 +30,12 @@ class DropEntry:
 
 
 class Monster:
-    def __init__(self, name, drop_list, members_only, slayer_lvl):
+    def __init__(self, name, drop_list, members_only, slayer_lvl, combat_lvls):
         self._drop_list = drop_list
         self._name = name
         self._members_only = members_only
         self._slayer_lvl = slayer_lvl
+        self._combat_lvls = combat_lvls
 
     @property
     def name(self):
@@ -52,6 +53,11 @@ class Monster:
     def slayer_lvl(self):
         return self._slayer_lvl
 
+    @property
+    def combat_lvls(self):
+        return self._combat_lvls
+
+
 
 # Takes as input an XML file obtained from the Wiki export function
 # and returns a tuple (item_names, monster_drops) where
@@ -68,6 +74,7 @@ def read_from_xml(xml_file):
 
     members_pattern = re.compile(r".*\|\s*members\s*=\s*(yes|no).*", re.IGNORECASE)
     slayer_pattern = re.compile(r".*\|\s*slaylvl\d?\s*=\s*(\d+).*", re.IGNORECASE)
+    combat_pattern = re.compile(r".*\|\s*combat\d?\s*=\s*(\d+).*", re.IGNORECASE)
     name_pattern = re.compile(r".*Name\s*=\s*(.*?)\s*[|}]")
     quantity_pattern = re.compile(r".*Quantity\s*=\s*(.*?)\s*[|}]")
     rarity_pattern = re.compile(r".*Rarity\s*=\s*(.*?)\s*[|}]")
@@ -80,7 +87,8 @@ def read_from_xml(xml_file):
         drop_list = []
 
         monster_members = False
-        slayer_lvl = 1;
+        slayer_lvl = 1
+        combat_lvls = []
         for line in page_text.split('\n'):
             members_match = members_pattern.match(line)
             if members_match:
@@ -90,6 +98,10 @@ def read_from_xml(xml_file):
             slayer_match = slayer_pattern.match(line)
             if slayer_match:
                 slayer_lvl = max(slayer_lvl, int(slayer_match.group(1)))
+
+            combat_match = combat_pattern.match(line)
+            if combat_match:
+                combat_lvls.append(int(combat_match.group(1)))
 
             if "DropsLine" in line:
                 name_match = name_pattern.match(line)
@@ -112,7 +124,8 @@ def read_from_xml(xml_file):
                     item_names.add(item_name)
                     drop_list.append(DropEntry(item_name, item_quantity, item_rarity, item_members))
 
-        monsters.append(Monster(monster_name, drop_list, monster_members, slayer_lvl))
+        combat_lvls = list(set(combat_lvls))
+        monsters.append(Monster(monster_name, drop_list, monster_members, slayer_lvl, combat_lvls))
 
     return (item_names, monsters)
 
@@ -123,6 +136,13 @@ def create_db_schema(conn):
       name TEXT NOT NULL,
       members_only BOOLEAN NOT NULL CHECK (members_only IN (0, 1)),
       slayer_lvl INTEGER NOT NULL
+    );
+
+    CREATE TABLE monster_combat_lvls (
+      monster_id INTEGER NOT NULL,
+      combat_lvl INTEGER NOT NULL,
+
+      FOREIGN KEY (monster_id) REFERENCES monsters(monster_id)
     );
 
     CREATE TABLE items (
@@ -154,12 +174,20 @@ def insert_items(conn, item_names):
         conn.execute(sql, (item,))
 
 def insert_monsters(conn, monsters):
-    sql = '''
+    sql_monster = '''
     INSERT INTO monsters (name, members_only, slayer_lvl) VALUES (?, ?, ?);
     '''
 
+    sql_combat = '''
+    INSERT INTO monster_combat_lvls (monster_id, combat_lvl) VALUES (?, ?);
+    '''
+
+    cur = conn.cursor()
     for m in monsters:
-        conn.execute(sql, (m.name, 1 if m.members_only else 0, m.slayer_lvl))
+        cur.execute(sql_monster, (m.name, 1 if m.members_only else 0, m.slayer_lvl))
+        monster_id = cur.lastrowid
+        for c in m.combat_lvls:
+            cur.execute(sql_combat, (monster_id, c))
 
 def insert_drops(conn, monsters):
     sql = '''
